@@ -19,7 +19,7 @@ from typing import Callable, Sequence
 
 
 APP_NAME = "Bloomer"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
 
@@ -196,6 +196,10 @@ def generate_build(rng: random.Random, main_tier: int = 4) -> tuple[tuple[int, i
         sequence.append(path)
         remaining[path] -= 1
     return tuple(desired), sequence
+
+
+def target_map_name(spec: MonkeySpec) -> str:
+    return "Spice Islands" if spec.water_map else "Monkey Meadow"
 
 
 @dataclass
@@ -651,7 +655,7 @@ class MacroEngine:
 
     def _navigate_to_game(self) -> bool:
         delay = float(self.config["loop"]["navigation_delay_seconds"])
-        map_name = "Spice Islands" if self.spec.water_map else "Monkey Meadow"
+        map_name = target_map_name(self.spec)
         self.log(f"Navigating to {map_name} / Easy / Standard...")
         self._click_point("home_play")
         if not self._wait(delay):
@@ -660,17 +664,19 @@ class MacroEngine:
         if not self._wait(delay):
             return False
 
-        if self.spec.water_map:
-            self._click_point("map_search")
-            if not self._wait(0.8):
-                return False
-            # The search field receives focus when the search button opens.
-            self.controller.hotkey("control", "a")
-            self.controller.press("backspace")
-            self.controller.type_text("Spice Islands")
-            self.controller.press("enter")
-            if not self._wait(delay):
-                return False
+        # Always search by exact map name. BTD6 remembers the last open page, so
+        # blindly clicking the first card can select Tree Stump instead of Monkey
+        # Meadow when a previous session left the Beginner list on page two.
+        self._click_point("map_search")
+        if not self._wait(0.8):
+            return False
+        # The search field receives focus when the search button opens.
+        self.controller.hotkey("control", "a")
+        self.controller.press("backspace")
+        self.controller.type_text(map_name)
+        self.controller.press("enter")
+        if not self._wait(delay):
+            return False
 
         self._click_point("map_card")
         if not self._wait(delay):

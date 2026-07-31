@@ -24,7 +24,7 @@ After confirming one cycle works, set **Cycles** to `0` for continuous farming. 
 
 Bloomer has no third-party runtime dependencies.
 
-Bloomer minimizes itself, locates the BTD6 client area, and scales normalized coordinates to the actual window. The width and height fields are only a fallback if the window title cannot be found.
+Bloomer minimizes itself, locates the BTD6 client area, searches for the exact target map by name, and scales normalized coordinates to the actual window. The width and height fields are only a fallback if the window title cannot be found.
 
 ## How the loop works
 

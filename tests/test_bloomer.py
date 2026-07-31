@@ -9,6 +9,7 @@ from bloomer import (
     deep_merge,
     generate_build,
     image_diff_score,
+    target_map_name,
 )
 
 
@@ -32,6 +33,12 @@ class BuildTests(unittest.TestCase):
     def test_deep_merge_preserves_new_defaults(self):
         merged = deep_merge({"a": {"b": 1, "c": 2}}, {"a": {"b": 9}})
         self.assertEqual(merged, {"a": {"b": 9, "c": 2}})
+
+    def test_target_map_routing(self):
+        self.assertEqual(target_map_name(MONKEYS["Dart Monkey"]), "Monkey Meadow")
+        self.assertEqual(target_map_name(MONKEYS["Banana Farm"]), "Monkey Meadow")
+        self.assertEqual(target_map_name(MONKEYS["Monkey Sub"]), "Spice Islands")
+        self.assertEqual(target_map_name(MONKEYS["Mermonkey"]), "Spice Islands")
 
 
 class VisualDetectionTests(unittest.TestCase):
