@@ -5,6 +5,7 @@ import unittest
 from bloomer import (
     DEFAULT_CONFIG,
     MONKEYS,
+    MacroEngine,
     INPUT,
     PixelFrame,
     PlacedTower,
@@ -12,8 +13,11 @@ from bloomer import (
     deep_merge,
     generate_build,
     image_diff_score,
+    parse_cash_text,
+    prepare_cash_ocr_frame,
     target_map_name,
 )
+from btd6_costs import PURCHASE_COSTS, tower_cost, upgrade_cost
 
 
 class BuildTests(unittest.TestCase):
@@ -64,6 +68,30 @@ class BuildTests(unittest.TestCase):
         self.assertGreaterEqual(loop["command_delay_seconds"], 0.10)
         self.assertGreaterEqual(loop["action_interval_seconds"], 0.5)
 
+    def test_purchase_costs_cover_every_supported_monkey(self):
+        self.assertEqual(set(PURCHASE_COSTS), set(MONKEYS))
+        for name in MONKEYS:
+            self.assertGreater(tower_cost(name), 0)
+            for path in range(3):
+                for tier in range(4):
+                    self.assertGreater(upgrade_cost(name, path, tier), 0)
+
+    def test_budget_gate_blocks_unaffordable_actions(self):
+        class CashReader:
+            last_text = "$650"
+
+            def read(self, _image):
+                return 650
+
+        engine = MacroEngine.__new__(MacroEngine)
+        engine.cash_reader = CashReader()
+        engine._budget_notice = ""
+        engine._screenshot = lambda: PixelFrame.solid(1, 1, (0, 0, 0))
+        engine.log = lambda _message: None
+
+        self.assertFalse(engine._can_afford(700, "test tower"))
+        self.assertTrue(engine._can_afford(600, "test tower"))
+
     def test_unavailable_upgrade_path_can_be_skipped(self):
         tower = PlacedTower("Boomerang Monkey", (0.2, 0.3), (4, 2, 0), [0, 1, 0, 1, 0, 0])
         tower.upgrade_index = 2
@@ -108,6 +136,20 @@ class VisualDetectionTests(unittest.TestCase):
         before = PixelFrame.solid(10, 10, (0, 0, 0))
         after = PixelFrame.solid(10, 10, (12, 12, 12))
         self.assertAlmostEqual(image_diff_score(before, after), 12.0)
+
+    def test_cash_ocr_parser_handles_symbols_and_common_substitutions(self):
+        self.assertEqual(parse_cash_text("$2,423"), 2423)
+        self.assertEqual(parse_cash_text("Cash: $65O"), 650)
+        self.assertEqual(parse_cash_text("$1 O2O"), 1020)
+        self.assertIsNone(parse_cash_text("cash unavailable"))
+
+    def test_cash_ocr_preprocessing_is_scaled_black_on_white(self):
+        image = PixelFrame.solid(2, 1, (245, 245, 245))
+        image.fill_rect((1, 0, 2, 1), (20, 150, 40))
+        prepared = prepare_cash_ocr_frame(image, scale=2)
+        self.assertEqual(prepared.size, (4, 2))
+        self.assertEqual(tuple(prepared.data[:4]), (0, 0, 0, 255))
+        self.assertEqual(tuple(prepared.data[8:12]), (255, 255, 255, 255))
 
 if __name__ == "__main__":
     unittest.main()

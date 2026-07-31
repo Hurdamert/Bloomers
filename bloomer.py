@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import ctypes
 from ctypes import wintypes
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import queue
 import random
+import re
 import sys
 import threading
 import time
@@ -17,9 +19,11 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Callable, Sequence
 
+from btd6_costs import tower_cost, upgrade_cost
+
 
 APP_NAME = "Bloomer"
-APP_VERSION = "0.1.7"
+APP_VERSION = "0.2.0"
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
 
@@ -150,6 +154,7 @@ DEFAULT_CONFIG: dict = {
         },
     },
     "detection": {
+        "cash_box": [0.170, 0.025, 0.360, 0.110],
         "placement_change_threshold": 4.2,
         "upgrade_change_threshold": 1.25,
         "end_blue_ratio": 0.055,
@@ -305,6 +310,82 @@ def normalized_crop(image: PixelFrame, box: Sequence[float]) -> PixelFrame:
         max(0, int(left * width)), max(0, int(top * height)),
         min(width, int(right * width)), min(height, int(bottom * height)),
     ))
+
+
+def prepare_cash_ocr_frame(image: PixelFrame, scale: int = 2) -> PixelFrame:
+    """Turn BTD6's bright cash text into enlarged black text on white."""
+    scale = max(1, int(scale))
+    width, height = image.width * scale, image.height * scale
+    output = bytearray(width * height * 4)
+    for source_y in range(image.height):
+        for source_x in range(image.width):
+            source = (source_y * image.width + source_x) * 4
+            b, g, r = image.data[source], image.data[source + 1], image.data[source + 2]
+            bright_neutral = min(r, g, b) >= 170 and max(r, g, b) - min(r, g, b) <= 72
+            value = 0 if bright_neutral else 255
+            pixel = bytes((value, value, value, 255))
+            for offset_y in range(scale):
+                output_y = source_y * scale + offset_y
+                row_start = (output_y * width + source_x * scale) * 4
+                for offset_x in range(scale):
+                    start = row_start + offset_x * 4
+                    output[start:start + 4] = pixel
+    return PixelFrame(width, height, output)
+
+
+def parse_cash_text(text: str) -> int | None:
+    """Extract a cash amount while tolerating common OCR digit substitutions."""
+    translation = str.maketrans({"O": "0", "Q": "0", "I": "1", "L": "1", "|": "1"})
+    candidates: list[int] = []
+    for token in re.findall(r"(?<![A-Z])[0-9OQIL|][0-9OQIL|,.\s]*(?![A-Z])", text.upper()):
+        digits = "".join(character for character in token.translate(translation) if character.isdigit())
+        if digits:
+            candidates.append(int(digits))
+    return max(candidates) if candidates else None
+
+
+class WindowsCashReader:
+    """Read the in-game cash counter with the local Windows OCR engine."""
+
+    def __init__(self, cash_box: Sequence[float]) -> None:
+        try:
+            from winrt.windows.graphics.imaging import BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap
+            from winrt.windows.media.ocr import OcrEngine
+        except ImportError as exc:
+            raise RuntimeError(
+                "Cash OCR components are missing. Run 'python -m pip install -r requirements.txt' "
+                "or launch Bloomer through run_bloomer.bat."
+            ) from exc
+
+        self.cash_box = tuple(float(value) for value in cash_box)
+        self.last_text = ""
+        self.BitmapAlphaMode = BitmapAlphaMode
+        self.BitmapPixelFormat = BitmapPixelFormat
+        self.SoftwareBitmap = SoftwareBitmap
+        self.engine = OcrEngine.try_create_from_user_profile_languages()
+        if self.engine is None:
+            raise RuntimeError("Windows OCR has no installed recognition language.")
+
+    @staticmethod
+    async def _await_result(operation):
+        return await operation
+
+    def read(self, screenshot: PixelFrame) -> int | None:
+        crop = normalized_crop(screenshot, self.cash_box)
+        prepared = prepare_cash_ocr_frame(crop)
+        bitmap = self.SoftwareBitmap.create_copy_from_buffer(
+            prepared.data,
+            self.BitmapPixelFormat.BGRA8,
+            prepared.width,
+            prepared.height,
+            self.BitmapAlphaMode.IGNORE,
+        )
+        try:
+            result = asyncio.run(self._await_result(self.engine.recognize_async(bitmap)))
+            self.last_text = result.text.strip()
+            return parse_cash_text(result.text)
+        finally:
+            bitmap.close()
 
 
 def image_diff_score(before: PixelFrame, after: PixelFrame) -> float:
@@ -637,6 +718,7 @@ class PlacedTower:
     helper: bool = False
     upgrade_index: int = 0
     failed_upgrades: int = 0
+    tiers: list[int] = field(default_factory=lambda: [0, 0, 0])
 
     @property
     def complete(self) -> bool:
@@ -678,6 +760,8 @@ class MacroEngine:
         self.hwnd: int | None = None
         self.rect = WindowRect(0, 0, 1920, 1200)
         self.thread: threading.Thread | None = None
+        self.cash_reader: WindowsCashReader | None = None
+        self._budget_notice = ""
         self._target_hotkey = self.config["hotkeys"]["tower_overrides"].get(
             tower_name, self.spec.default_hotkey
         )
@@ -709,6 +793,8 @@ class MacroEngine:
         return self._wait(delay * multiplier)
 
     def _run(self) -> None:
+        self.cash_reader = WindowsCashReader(self.config["detection"]["cash_box"])
+        self.log("Local Windows cash OCR is active; purchase inputs are budget-gated.")
         window = self.config["window"]
         self.hwnd = self.controller.find_window(str(window["title_contains"]))
         self.rect = self.controller.client_rect(
@@ -813,6 +899,34 @@ class MacroEngine:
             (x - radius * aspect_adjustment, y - radius, x + radius * aspect_adjustment, y + radius),
         )
 
+    def _can_afford(self, required: int, description: str) -> bool:
+        if self.cash_reader is None:
+            return False
+        try:
+            cash = self.cash_reader.read(self._screenshot())
+        except Exception as exc:
+            notice = f"Cash OCR error ({type(exc).__name__}: {exc}); postponing purchases."
+            if notice != self._budget_notice:
+                self.log(notice)
+                self._budget_notice = notice
+            return False
+        if cash is None:
+            raw = self.cash_reader.last_text or "no text"
+            notice = f"Cash OCR could not read the budget ({raw!r}); postponing purchases."
+            if notice != self._budget_notice:
+                self.log(notice)
+                self._budget_notice = notice
+            return False
+        if cash < required:
+            notice = f"Waiting for {description}: cash ${cash:,} / safe budget ${required:,}."
+            if notice != self._budget_notice:
+                self.log(notice)
+                self._budget_notice = notice
+            return False
+        self.log(f"Budget approved for {description}: cash ${cash:,}, requires at most ${required:,}.")
+        self._budget_notice = ""
+        return True
+
     def _try_place(
         self,
         name: str,
@@ -821,6 +935,8 @@ class MacroEngine:
         helper: bool = False,
         fixed_build: tuple[int, int, int] | None = None,
     ) -> PlacementAttempt:
+        if not self._can_afford(tower_cost(name), name):
+            return PlacementAttempt()
         before = self._point_crop(self._screenshot(), point)
         self.controller.press(hotkey)
         if not self._command_wait():
@@ -855,6 +971,17 @@ class MacroEngine:
     def _try_upgrade(self, tower: PlacedTower) -> bool:
         if tower.complete:
             return False
+        path = tower.sequence[tower.upgrade_index]
+        required = upgrade_cost(tower.name, path, tower.tiers[path])
+        if required is None:
+            skipped = tower.skip_remaining_path(path)
+            self.log(
+                f"{tower.name} {tower.build_label}: no cost data for its next path {path + 1} tier; "
+                f"skipped {skipped} remaining upgrade(s) on that path."
+            )
+            return False
+        if not self._can_afford(required, f"{tower.name} path {path + 1} tier {tower.tiers[path] + 1}"):
+            return False
         self.controller.click(*self.rect.point(tower.point))
         if not self._command_wait():
             return False
@@ -862,7 +989,6 @@ class MacroEngine:
         # BTD6 opens the upgrade panel opposite the selected tower.
         panel_box = (0.735, 0.10, 1.0, 0.94) if tower.point[0] < 0.50 else (0.0, 0.10, 0.265, 0.94)
         before = normalized_crop(self._screenshot(), panel_box)
-        path = tower.sequence[tower.upgrade_index]
         configured_keys = (
             str(self.config["hotkeys"]["upgrade_top"]),
             str(self.config["hotkeys"]["upgrade_middle"]),
@@ -883,6 +1009,7 @@ class MacroEngine:
         success = change >= threshold and change >= max(threshold, motion * 1.18)
         if success:
             tower.upgrade_index += 1
+            tower.tiers[path] += 1
             tower.failed_upgrades = 0
             self.log(
                 f"{tower.name} {tower.build_label}: bought path {path + 1} "

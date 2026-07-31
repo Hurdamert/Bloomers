@@ -1,1 +1,8 @@
-# No third-party packages are required. Kept for a familiar setup workflow.
+# Small Python projections for Windows' built-in, fully local OCR engine.
+winrt-runtime==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.Foundation.Collections==3.2.1
+winrt-Windows.Globalization==3.2.1
+winrt-Windows.Graphics.Imaging==3.2.1
+winrt-Windows.Media.Ocr==3.2.1
+winrt-Windows.Storage.Streams==3.2.1
