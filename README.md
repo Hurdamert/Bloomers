@@ -6,7 +6,7 @@ Land towers use Monkey Meadow. Monkey Sub, Monkey Buccaneer, and Mermonkey use S
 
 ## Quick start
 
-1. Install [Python 3.11 or newer](https://www.python.org/downloads/windows/) and enable **Add Python to PATH** during installation.
+1. Install [Python 3.11 or newer](https://www.python.org/downloads/windows/) and enable **Add python.exe to PATH** or **Install launcher for all users** during installation.
 2. Clone this repository and enter its directory:
 
    ```powershell
@@ -17,7 +17,7 @@ Land towers use Monkey Meadow. Monkey Sub, Monkey Buccaneer, and Mermonkey use S
 3. In BTD6, open **Settings > Controls** and use **Click & Drop** tower placement. Placement hotkeys do not reliably work with Drag & Drop.
 4. Keep the standard tower and upgrade bindings. The macro expects comma, period, and slash for top, middle, and bottom upgrades.
 5. BTD6 does not assign default placement keys to Mermonkey or Desperado. If farming either one, open **Settings > Hotkeys** and bind the same key shown in Bloomer. The suggested keys are `P` and `[`, respectively.
-6. Double-click `run_bloomer.bat`, or run `py bloomer.py` from PowerShell.
+6. Double-click `run_bloomer.bat`. It automatically finds `py`, `python`, or `python3`. You can also run `python bloomer.py` from PowerShell.
 7. Return to the BTD6 main menu, choose a tower in Bloomer, set **Cycles** to `1` for the first test, and click **Start farming**.
 
 After confirming one cycle works, set **Cycles** to `0` for continuous farming. Press **F8** at any time for an emergency stop.
