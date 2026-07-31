@@ -1,5 +1,7 @@
 import random
 import ctypes
+from pathlib import Path
+import tempfile
 import unittest
 
 from bloomer import (
@@ -9,15 +11,19 @@ from bloomer import (
     INPUT,
     PixelFrame,
     PlacedTower,
+    available_builds,
+    build_sequence,
     classify_end_screen,
     deep_merge,
     generate_build,
     image_diff_score,
     parse_cash_text,
+    parse_round_text,
     prepare_cash_ocr_frame,
     target_map_name,
 )
 from btd6_costs import PURCHASE_COSTS, tower_cost, upgrade_cost
+from learning import LearningOptimizer, game_reward
 
 
 class BuildTests(unittest.TestCase):
@@ -36,6 +42,13 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(len(sequence), 6)
             self.assertEqual(tuple(sequence.count(path) for path in range(3)), build)
         self.assertEqual(len(seen), 6)
+
+    def test_available_builds_and_sequences_match(self):
+        builds = available_builds(4)
+        self.assertEqual(len(builds), 6)
+        for build in builds:
+            sequence = build_sequence(random.Random(7), build)
+            self.assertEqual(tuple(sequence.count(path) for path in range(3)), build)
 
     def test_deep_merge_preserves_new_defaults(self):
         merged = deep_merge({"a": {"b": 1, "c": 2}}, {"a": {"b": 9}})
@@ -164,6 +177,11 @@ class VisualDetectionTests(unittest.TestCase):
         self.assertEqual(parse_cash_text("$1 O2O"), 1020)
         self.assertIsNone(parse_cash_text("cash unavailable"))
 
+    def test_round_ocr_parser(self):
+        self.assertEqual(parse_round_text("DEFEAT\nROUND 34"), 34)
+        self.assertEqual(parse_round_text("R0UND 4"), 4)
+        self.assertIsNone(parse_round_text("VICTORY"))
+
     def test_cash_ocr_preprocessing_is_scaled_black_on_white(self):
         image = PixelFrame.solid(2, 1, (245, 245, 245))
         image.fill_rect((1, 0, 2, 1), (20, 150, 40))
@@ -171,6 +189,44 @@ class VisualDetectionTests(unittest.TestCase):
         self.assertEqual(prepared.size, (4, 2))
         self.assertEqual(tuple(prepared.data[:4]), (0, 0, 0, 255))
         self.assertEqual(tuple(prepared.data[8:12]), (255, 255, 255, 255))
+
+
+class LearningTests(unittest.TestCase):
+    def test_reward_prefers_progress_then_fast_victories(self):
+        self.assertGreater(game_reward("defeat", 30, 200), game_reward("defeat", 10, 200))
+        self.assertGreater(game_reward("victory", 40, 180), game_reward("victory", 40, 360))
+        self.assertGreater(game_reward("victory", 40, 360), game_reward("defeat", 39, 360))
+
+    def test_optimizer_learns_and_persists_better_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "learning.json"
+            optimizer = LearningOptimizer(path, "Dart Monkey", exploration=0, rng=random.Random(3))
+            point = (0.25, 0.35)
+            optimizer.record_game([(point, "420")], "victory", 40, 240)
+            optimizer.record_game([(point, "402")], "defeat", 12, 240)
+
+            reloaded = LearningOptimizer(path, "Dart Monkey", exploration=0, rng=random.Random(3))
+            self.assertEqual(reloaded.games, 2)
+            self.assertEqual(reloaded.choose_build([(4, 2, 0), (4, 0, 2)]), (4, 2, 0))
+
+    def test_optimizer_ranks_best_tested_point_last_for_engine_pop(self):
+        optimizer = LearningOptimizer(None, "Dart Monkey", exploration=0, rng=random.Random(4))
+        good = (0.25, 0.35)
+        weak = (0.75, 0.72)
+        optimizer.record_placement(good, True)
+        optimizer.record_placement(weak, True)
+        optimizer.record_game([(good, "420")], "victory", 40, 240)
+        optimizer.record_game([(weak, "402")], "defeat", 8, 240)
+
+        self.assertEqual(optimizer.rank_points([good, weak])[-1], good)
+
+    def test_rejected_point_loses_priority_to_untried_point(self):
+        optimizer = LearningOptimizer(None, "Dart Monkey", exploration=0, rng=random.Random(5))
+        rejected = (0.25, 0.35)
+        untried = (0.75, 0.72)
+        optimizer.record_placement(rejected, False)
+
+        self.assertEqual(optimizer.rank_points([rejected, untried])[-1], untried)
 
 if __name__ == "__main__":
     unittest.main()

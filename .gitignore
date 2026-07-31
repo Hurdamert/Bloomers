@@ -1,3 +1,5 @@
 __pycache__/
 *.py[cod]
 .venv/
+learning_state.json
+learning_state.json.tmp

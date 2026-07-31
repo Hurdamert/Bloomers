@@ -1,6 +1,6 @@
 # Bloomers
 
-Bloomer is a small Windows macro for farming tower XP in the Steam version of Bloons TD 6. It starts Easy Standard games, fills the map with one selected non-hero tower, buys randomized valid two-path builds, and restarts after victory or defeat.
+Bloomer is a small Windows macro for farming tower XP in the Steam version of Bloons TD 6. It starts Easy Standard games, fills the map with one selected non-hero tower, buys valid two-path builds, learns which placements and builds perform best, and restarts after victory or defeat.
 
 Land towers use Monkey Meadow. Monkey Sub, Monkey Buccaneer, and Mermonkey use Spice Islands. Banana Farm and Monkey Village receive a small Dart/Bomb defense so their games can progress.
 
@@ -35,11 +35,18 @@ Bloomer minimizes itself, locates the BTD6 client area, searches for the exact t
 - Curated Monkey Meadow points favor grass close to the road while excluding known road locations. Every placement attempt sends an explicit left click before the macro evaluates whether it succeeded.
 - Visual change detection confirms successful placements and upgrades after the budget gate approves them.
 - Before sending a purchase input, Bloomer reads the live cash counter and compares it with a conservative Normal-price ceiling. Because the macro plays Easy, this remains safe when Easy or Monkey Knowledge discounts lower the actual price.
+- The mini-AI explores only the curated placement points and six valid build shapes, then increasingly favors choices with stronger completed-game rewards.
 - After four failed attempts, an unavailable upgrade path is skipped for that monkey and farming continues with its remaining cross-path upgrades. This allows partially unlocked monkeys to keep running.
 - Bloomer sends one initial pair per game: Start Round, then Fast Forward. It sends no more round or speed commands during that game, leaving later rounds to BTD6's automatic handling.
 - A visual detector distinguishes the blue Victory and Defeat dialogs. Defeat uses Restart; victory uses Home and begins the navigation flow again.
 
 The activity log shows every confirmed placement, upgrade, and detected end screen.
+
+## Mini-AI learning
+
+The optimizer is enabled by default. It is a small upper-confidence-bound learner rather than an unrestricted neural-network agent: untested options receive an exploration bonus, while accumulated results gradually favor placements and builds that reach later rounds and win. Faster victories receive a modest tie-breaking bonus.
+
+Learning is isolated per monkey and saved locally in `learning_state.json`; this file is ignored by Git. The AI never invents screen coordinates, clicks outside the curated candidate list, chooses invalid three-path builds, or bypasses the cash and visual safety checks. Use **Reset selected monkey AI** to clear only the currently selected monkey's history, or disable **Enable mini-AI placement/build optimizer** to restore randomized behavior.
 
 ## Resolution and calibration
 
@@ -49,7 +56,7 @@ Use **Calibrate points...** to record navigation and end-screen buttons for anot
 
 **Start-speed delay** controls the pause between the one-time Start Round and Fast Forward presses. **Command delay** controls the pause between other closely related inputs, such as selecting a tower, left-clicking its location, and cancelling the placement cursor. Increase either delay if BTD6 misses the corresponding input. **Action interval** controls the pause between placement/upgrade decisions during a running round.
 
-Advanced timing, detection thresholds, the normalized `cash_box`, placement lists, and the `upgrade_retry_limit` live in [`config.json`](config.json). The application creates or updates that file without discarding newly added defaults. Conservative purchase ceilings are kept in [`btd6_costs.py`](btd6_costs.py) and originate from the [BTD6 Mod Helper game-data export](https://github.com/Btd6ModHelper/btd6-game-data).
+Advanced timing, detection thresholds, normalized OCR boxes, placement lists, `upgrade_retry_limit`, and learning exploration live in [`config.json`](config.json). The application creates or updates that file without discarding newly added defaults. Conservative purchase ceilings are kept in [`btd6_costs.py`](btd6_costs.py) and originate from the [BTD6 Mod Helper game-data export](https://github.com/Btd6ModHelper/btd6-game-data).
 
 ## Important limits
 
@@ -58,6 +65,7 @@ Advanced timing, detection thresholds, the normalized `cash_box`, placement list
 - Do not move the mouse or type while the macro is active.
 - The profile deliberately never clicks the paid Continue button on defeat.
 - Visual automation can break after a BTD6 UI update. Test one finite cycle before leaving it unattended.
+- Early learning games deliberately explore options and may perform worse than later games.
 - Use it only for ordinary single-player play where automation is permitted. Do not use it in co-op, races, ranked events, or leaderboards.
 
 ## Tests

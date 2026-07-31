@@ -20,10 +20,11 @@ from tkinter import messagebox, ttk
 from typing import Callable, Sequence
 
 from btd6_costs import tower_cost, upgrade_cost
+from learning import LearningOptimizer
 
 
 APP_NAME = "Bloomer"
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.3.0"
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
 
@@ -156,10 +157,16 @@ DEFAULT_CONFIG: dict = {
     },
     "detection": {
         "cash_box": [0.170, 0.025, 0.360, 0.110],
+        "end_round_box": [0.250, 0.180, 0.750, 0.560],
         "placement_change_threshold": 4.2,
         "upgrade_change_threshold": 1.25,
         "end_blue_ratio": 0.055,
         "end_text_ratio": 0.008,
+    },
+    "learning": {
+        "enabled": True,
+        "state_file": "learning_state.json",
+        "exploration": 0.45,
     },
     "points": {
         "home_play": [0.500, 0.865],
@@ -230,21 +237,32 @@ def save_config(config: dict, path: Path = CONFIG_PATH) -> None:
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
-def generate_build(rng: random.Random, main_tier: int = 4) -> tuple[tuple[int, int, int], list[int]]:
-    """Return a valid randomized build and a randomized, order-safe upgrade sequence."""
-    main_path, cross_path = rng.choice(BUILD_SHAPES)
-    desired = [0, 0, 0]
-    desired[main_path] = main_tier
-    desired[cross_path] = 2
+def available_builds(main_tier: int = 4) -> list[tuple[int, int, int]]:
+    builds: list[tuple[int, int, int]] = []
+    for main_path, cross_path in BUILD_SHAPES:
+        desired = [0, 0, 0]
+        desired[main_path] = main_tier
+        desired[cross_path] = 2
+        builds.append(tuple(desired))
+    return builds
 
-    remaining = desired.copy()
+
+def build_sequence(rng: random.Random, build: Sequence[int]) -> list[int]:
+    """Randomize the purchase order while preserving a requested valid build."""
+    remaining = [int(value) for value in build]
     sequence: list[int] = []
     while any(remaining):
         available = [index for index, count in enumerate(remaining) if count > 0]
         path = rng.choice(available)
         sequence.append(path)
         remaining[path] -= 1
-    return tuple(desired), sequence
+    return sequence
+
+
+def generate_build(rng: random.Random, main_tier: int = 4) -> tuple[tuple[int, int, int], list[int]]:
+    """Return a valid randomized build and a randomized, order-safe upgrade sequence."""
+    build = rng.choice(available_builds(main_tier))
+    return build, build_sequence(rng, build)
 
 
 def target_map_name(spec: MonkeySpec) -> str:
@@ -345,6 +363,16 @@ def parse_cash_text(text: str) -> int | None:
     return max(candidates) if candidates else None
 
 
+def parse_round_text(text: str) -> int | None:
+    """Extract the defeated round from OCR text such as 'ROUND 34'."""
+    translation = str.maketrans({"O": "0", "Q": "0", "I": "1", "L": "1", "|": "1"})
+    normalized = text.upper().translate(translation)
+    match = re.search(r"R0UND\s*([0-9]{1,3})", normalized)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 class WindowsCashReader:
     """Read the in-game cash counter with the local Windows OCR engine."""
 
@@ -371,8 +399,8 @@ class WindowsCashReader:
     async def _await_result(operation):
         return await operation
 
-    def read(self, screenshot: PixelFrame) -> int | None:
-        crop = normalized_crop(screenshot, self.cash_box)
+    def read_text(self, screenshot: PixelFrame, box: Sequence[float]) -> str:
+        crop = normalized_crop(screenshot, box)
         prepared = prepare_cash_ocr_frame(crop)
         bitmap = self.SoftwareBitmap.create_copy_from_buffer(
             prepared.data,
@@ -384,9 +412,12 @@ class WindowsCashReader:
         try:
             result = asyncio.run(self._await_result(self.engine.recognize_async(bitmap)))
             self.last_text = result.text.strip()
-            return parse_cash_text(result.text)
+            return result.text
         finally:
             bitmap.close()
+
+    def read(self, screenshot: PixelFrame) -> int | None:
+        return parse_cash_text(self.read_text(screenshot, self.cash_box))
 
 
 def image_diff_score(before: PixelFrame, after: PixelFrame) -> float:
@@ -762,6 +793,7 @@ class MacroEngine:
         self.rect = WindowRect(0, 0, 1920, 1200)
         self.thread: threading.Thread | None = None
         self.cash_reader: WindowsCashReader | None = None
+        self.learner: LearningOptimizer | None = None
         self._budget_notice = ""
         self._target_hotkey = self.config["hotkeys"]["tower_overrides"].get(
             tower_name, self.spec.default_hotkey
@@ -796,6 +828,20 @@ class MacroEngine:
     def _run(self) -> None:
         self.cash_reader = WindowsCashReader(self.config["detection"]["cash_box"])
         self.log("Local Windows cash OCR is active; purchase inputs are budget-gated.")
+        learning = self.config["learning"]
+        if bool(learning["enabled"]):
+            state_name = Path(str(learning["state_file"])).name
+            state_path = Path(__file__).with_name(state_name)
+            self.learner = LearningOptimizer(
+                state_path,
+                self.spec.name,
+                float(learning["exploration"]),
+                self.rng,
+            )
+            self.log(
+                f"Mini-AI optimizer active for {self.spec.name}; "
+                f"learning from {self.learner.games} completed game(s)."
+            )
         window = self.config["window"]
         self.hwnd = self.controller.find_window(str(window["title_contains"]))
         self.rect = self.controller.client_rect(
@@ -956,15 +1002,21 @@ class MacroEngine:
         score = image_diff_score(before, after)
         threshold = float(self.config["detection"]["placement_change_threshold"])
         if score < threshold:
+            if self.learner is not None and not helper:
+                self.learner.record_placement(point, False)
             self.log(f"Placement not confirmed at {point[0]:.3f}, {point[1]:.3f} (change {score:.1f}).")
             return PlacementAttempt()
 
         if fixed_build is None:
-            build, sequence = generate_build(self.rng, int(self.config["loop"]["main_path_tier"]))
+            builds = available_builds(int(self.config["loop"]["main_path_tier"]))
+            build = self.learner.choose_build(builds) if self.learner is not None else self.rng.choice(builds)
+            sequence = build_sequence(self.rng, build)
         else:
             build = fixed_build
-            sequence = [path for path, count in enumerate(build) for _ in range(count)]
+            sequence = build_sequence(self.rng, build)
         tower = PlacedTower(name, point, build, sequence, helper=helper)
+        if self.learner is not None and not helper:
+            self.learner.record_placement(point, True)
         role = "helper" if helper else "target"
         self.log(f"Placed {role} {name} with planned build {tower.build_label} (change {score:.1f}).")
         return PlacementAttempt(tower=tower)
@@ -1037,11 +1089,40 @@ class MacroEngine:
         self.log("Started the game and enabled fast-forward once; no more round commands will be sent.")
         return True
 
+    def _record_learning(
+        self,
+        result: str,
+        end_frame: PixelFrame,
+        target_towers: Sequence[PlacedTower],
+        started_at: float,
+    ) -> None:
+        if self.learner is None:
+            return
+        duration = max(0.0, time.monotonic() - started_at)
+        round_reached: int | None = 40 if result == "victory" else None
+        if result == "defeat" and self.cash_reader is not None:
+            try:
+                text = self.cash_reader.read_text(end_frame, self.config["detection"]["end_round_box"])
+                round_reached = parse_round_text(text)
+            except Exception as exc:
+                self.log(f"Mini-AI could not read the defeat round: {type(exc).__name__}: {exc}")
+        choices = [(tower.point, tower.build_label) for tower in target_towers]
+        reward = self.learner.record_game(choices, result, round_reached, duration)
+        round_label = "unknown" if round_reached is None else str(round_reached)
+        self.log(
+            f"Mini-AI learned from {result}, round {round_label}, {duration:.1f}s: "
+            f"reward {reward:.3f}; profile games {self.learner.games}."
+        )
+
     def _play_one_game(self) -> str | None:
+        started_at = time.monotonic()
         self.log(f"Farming {self.spec.name}. End-screen detection is active.")
         placement_key = "spice_islands" if self.spec.water_map else "monkey_meadow_near_track"
         candidates = [tuple(point) for point in self.config["placements"][placement_key]]
-        self.rng.shuffle(candidates)
+        if self.learner is not None:
+            candidates = self.learner.rank_points(candidates)
+        else:
+            self.rng.shuffle(candidates)
         helper_points = [tuple(point) for point in self.config["placements"]["helpers"]]
         target_towers: list[PlacedTower] = []
         helpers: list[PlacedTower] = []
@@ -1076,9 +1157,11 @@ class MacroEngine:
         while not self.stop_event.is_set():
             now = time.monotonic()
             if now >= next_detection:
-                end_state = classify_end_screen(self._screenshot(), self.config["detection"])
+                end_frame = self._screenshot()
+                end_state = classify_end_screen(end_frame, self.config["detection"])
                 if end_state:
                     self.log(f"Detected {end_state} screen.")
+                    self._record_learning(end_state, end_frame, target_towers, started_at)
                     return end_state
                 next_detection = now + 1.25
 
@@ -1209,8 +1292,8 @@ class BloomerApp:
         self._f8_was_down = False
 
         self.root.title(f"{APP_NAME} {APP_VERSION}")
-        self.root.geometry("700x720")
-        self.root.minsize(660, 640)
+        self.root.geometry("700x760")
+        self.root.minsize(660, 680)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         self.tower_var = tk.StringVar(value=str(self.config["last_tower"]))
@@ -1222,6 +1305,7 @@ class BloomerApp:
         self.fast_forward_delay_var = tk.StringVar(value=str(self.config["loop"]["fast_forward_delay_seconds"]))
         self.command_delay_var = tk.StringVar(value=str(self.config["loop"]["command_delay_seconds"]))
         self.action_interval_var = tk.StringVar(value=str(self.config["loop"]["action_interval_seconds"]))
+        self.learning_var = tk.BooleanVar(value=bool(self.config["learning"]["enabled"]))
         self.status_var = tk.StringVar(value="Ready - put BTD6 on its main menu before starting.")
 
         self._build_ui()
@@ -1279,8 +1363,15 @@ class BloomerApp:
             row=8, column=3, sticky="w", padx=(8, 0), pady=(10, 0)
         )
 
+        ttk.Checkbutton(
+            outer, text="Enable mini-AI placement/build optimizer", variable=self.learning_var
+        ).grid(row=9, column=0, columnspan=3, sticky="w", pady=(12, 0))
+        ttk.Button(outer, text="Reset selected monkey AI", command=self.reset_learning).grid(
+            row=9, column=3, sticky="e", pady=(12, 0)
+        )
+
         controls = ttk.Frame(outer)
-        controls.grid(row=9, column=0, columnspan=4, sticky="ew", pady=16)
+        controls.grid(row=10, column=0, columnspan=4, sticky="ew", pady=16)
         self.start_button = ttk.Button(controls, text="Start farming", command=self.start)
         self.start_button.pack(side="left")
         self.stop_button = ttk.Button(controls, text="Stop (F8)", command=self.stop, state="disabled")
@@ -1289,23 +1380,23 @@ class BloomerApp:
         ttk.Button(controls, text="Calibrate points...", command=self.calibrate).pack(side="left")
 
         ttk.Label(outer, textvariable=self.status_var, wraplength=630).grid(
-            row=10, column=0, columnspan=4, sticky="w", pady=(0, 8)
+            row=11, column=0, columnspan=4, sticky="w", pady=(0, 8)
         )
         self.log_box = tk.Text(outer, height=16, wrap="word", state="disabled", font=("Consolas", 9))
-        self.log_box.grid(row=11, column=0, columnspan=4, sticky="nsew")
+        self.log_box.grid(row=12, column=0, columnspan=4, sticky="nsew")
         scrollbar = ttk.Scrollbar(outer, orient="vertical", command=self.log_box.yview)
-        scrollbar.grid(row=11, column=4, sticky="ns")
+        scrollbar.grid(row=12, column=4, sticky="ns")
         self.log_box.configure(yscrollcommand=scrollbar.set)
 
         ttk.Label(
             outer,
             text="Emergency stop: F8. Keep this macro out of co-op, races, ranked events, and other competitive modes.",
             foreground="#8a2d2d",
-        ).grid(row=12, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        ).grid(row=13, column=0, columnspan=4, sticky="w", pady=(10, 0))
 
         outer.columnconfigure(1, weight=1)
         outer.columnconfigure(3, weight=1)
-        outer.rowconfigure(11, weight=1)
+        outer.rowconfigure(12, weight=1)
 
     def _tower_changed(self) -> None:
         name = self.tower_var.get()
@@ -1349,7 +1440,29 @@ class BloomerApp:
         self.config["loop"]["fast_forward_delay_seconds"] = fast_forward_delay
         self.config["loop"]["command_delay_seconds"] = command_delay
         self.config["loop"]["action_interval_seconds"] = action_interval
+        self.config["learning"]["enabled"] = bool(self.learning_var.get())
         self.config["hotkeys"]["tower_overrides"][name] = hotkey
+
+    def reset_learning(self) -> None:
+        if self.engine is not None:
+            messagebox.showinfo(APP_NAME, "Stop the macro before resetting learning.", parent=self.root)
+            return
+        name = self.tower_var.get()
+        if not messagebox.askyesno(
+            APP_NAME,
+            f"Reset all learned placements and builds for {name}?",
+            parent=self.root,
+        ):
+            return
+        state_name = Path(str(self.config["learning"]["state_file"])).name
+        optimizer = LearningOptimizer(
+            Path(__file__).with_name(state_name),
+            name,
+            float(self.config["learning"]["exploration"]),
+        )
+        previous_games = optimizer.games
+        optimizer.reset()
+        self.status_var.set(f"Reset {previous_games} learned game(s) for {name}.")
 
     def save_settings(self) -> None:
         try:
