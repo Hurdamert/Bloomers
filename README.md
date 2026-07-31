@@ -34,6 +34,7 @@ Bloomer minimizes itself, locates the BTD6 client area, searches for the exact t
 - Every target gets one of six randomly selected builds: `420`, `402`, `240`, `042`, `204`, or `024` by default.
 - Curated Monkey Meadow points favor grass close to the road while excluding known road locations. Every placement attempt sends an explicit left click before the macro evaluates whether it succeeded.
 - Visual change detection confirms placements and upgrades, so failed purchases caused by insufficient cash are retried later.
+- After four failed attempts, an unavailable upgrade path is skipped for that monkey and farming continues with its remaining cross-path upgrades. This allows partially unlocked monkeys to keep running.
 - Paired Space presses use a transition delay so a paused round reliably starts and enters fast-forward without changing the speed of a round already in progress.
 - A visual detector distinguishes the blue Victory and Defeat dialogs. Defeat uses Restart; victory uses Home and begins the navigation flow again.
 
@@ -47,7 +48,7 @@ Use **Calibrate points...** to record navigation and end-screen buttons for anot
 
 **Command delay** controls the pause between closely related inputs, such as selecting a tower, left-clicking its location, and cancelling the placement cursor. Increase it if BTD6 misses clicks or keys. **Action interval** controls the pause between placement/upgrade decisions during a running round.
 
-Advanced timing, detection thresholds, and placement lists live in [`config.json`](config.json). The application creates or updates that file without discarding newly added defaults.
+Advanced timing, detection thresholds, placement lists, and the `upgrade_retry_limit` live in [`config.json`](config.json). The application creates or updates that file without discarding newly added defaults.
 
 ## Important limits
 

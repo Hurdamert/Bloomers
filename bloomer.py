@@ -19,7 +19,7 @@ from typing import Callable, Sequence
 
 
 APP_NAME = "Bloomer"
-APP_VERSION = "0.1.5"
+APP_VERSION = "0.1.6"
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
 
@@ -138,6 +138,7 @@ DEFAULT_CONFIG: dict = {
         "max_target_towers": 8,
         "placement_every_actions": 4,
         "main_path_tier": 4,
+        "upgrade_retry_limit": 4,
     },
     "hotkeys": {
         "upgrade_top": ",",
@@ -647,6 +648,14 @@ class PlacedTower:
     def build_label(self) -> str:
         return "".join(str(value) for value in self.build)
 
+    def skip_remaining_path(self, path: int) -> int:
+        """Retire an unavailable tier and all higher tiers on the same path."""
+        remaining = self.sequence[self.upgrade_index:]
+        skipped = remaining.count(path)
+        self.sequence[self.upgrade_index:] = [candidate for candidate in remaining if candidate != path]
+        self.failed_upgrades = 0
+        return skipped
+
 
 @dataclass
 class PlacementAttempt:
@@ -883,6 +892,13 @@ class MacroEngine:
             )
         else:
             tower.failed_upgrades += 1
+            retry_limit = max(1, int(self.config["loop"]["upgrade_retry_limit"]))
+            if tower.failed_upgrades >= retry_limit:
+                skipped = tower.skip_remaining_path(path)
+                self.log(
+                    f"{tower.name} {tower.build_label}: skipped {skipped} remaining path {path + 1} "
+                    f"upgrade(s) after {retry_limit} failed attempts; continuing with available upgrades."
+                )
         return success
 
     def _pulse_round(self) -> None:

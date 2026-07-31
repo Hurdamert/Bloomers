@@ -7,6 +7,7 @@ from bloomer import (
     MONKEYS,
     INPUT,
     PixelFrame,
+    PlacedTower,
     classify_end_screen,
     deep_merge,
     generate_build,
@@ -62,6 +63,26 @@ class BuildTests(unittest.TestCase):
         loop = DEFAULT_CONFIG["loop"]
         self.assertGreaterEqual(loop["command_delay_seconds"], 0.10)
         self.assertGreaterEqual(loop["action_interval_seconds"], 0.5)
+
+    def test_unavailable_upgrade_path_can_be_skipped(self):
+        tower = PlacedTower("Boomerang Monkey", (0.2, 0.3), (4, 2, 0), [0, 1, 0, 1, 0, 0])
+        tower.upgrade_index = 2
+        tower.failed_upgrades = 4
+
+        skipped = tower.skip_remaining_path(0)
+
+        self.assertEqual(skipped, 3)
+        self.assertEqual(tower.sequence, [0, 1, 1])
+        self.assertEqual(tower.upgrade_index, 2)
+        self.assertFalse(tower.complete)
+        self.assertEqual(tower.failed_upgrades, 0)
+
+    def test_skipping_last_available_path_completes_tower(self):
+        tower = PlacedTower("Dart Monkey", (0.2, 0.3), (4, 0, 2), [2, 2, 0, 0, 0, 0])
+        tower.upgrade_index = 2
+
+        self.assertEqual(tower.skip_remaining_path(0), 4)
+        self.assertTrue(tower.complete)
 
 
 class VisualDetectionTests(unittest.TestCase):
