@@ -19,7 +19,7 @@ from typing import Callable, Sequence
 
 
 APP_NAME = "Bloomer"
-APP_VERSION = "0.1.4"
+APP_VERSION = "0.1.5"
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
 
@@ -132,6 +132,7 @@ DEFAULT_CONFIG: dict = {
         "load_delay_seconds": 8.0,
         "round_pulse_seconds": 22.0,
         "fast_forward_delay_seconds": 0.55,
+        "command_delay_seconds": 0.35,
         "action_interval_seconds": 3.5,
         "restart_delay_seconds": 7.0,
         "max_target_towers": 8,
@@ -151,7 +152,6 @@ DEFAULT_CONFIG: dict = {
     },
     "detection": {
         "placement_change_threshold": 4.2,
-        "invalid_placement_red_ratio": 0.065,
         "upgrade_change_threshold": 1.25,
         "end_blue_ratio": 0.055,
         "end_text_ratio": 0.008,
@@ -322,18 +322,6 @@ def image_diff_score(before: PixelFrame, after: PixelFrame) -> float:
     return total / count if count else 0.0
 
 
-def invalid_placement_red_ratio(image: PixelFrame) -> float:
-    """Return the proportion of pixels matching BTD6's red invalid ghost overlay."""
-    pixels = list(image.sampled_rgb(target_samples=12000))
-    if not pixels:
-        return 0.0
-    invalid_red = sum(
-        1 for r, g, b in pixels
-        if r >= 155 and g <= 105 and b <= 105 and r >= g * 1.65 and r >= b * 1.55
-    )
-    return invalid_red / len(pixels)
-
-
 def classify_end_screen(image: PixelFrame, detection: dict) -> str | None:
     """Classify the standard blue BTD6 end dialog as victory or defeat."""
     sample = normalized_crop(image, (0.245, 0.155, 0.745, 0.790))
@@ -394,6 +382,7 @@ class WindowsController:
     }
     KEYUP = 0x0002
     SCANCODE = 0x0008
+    INPUT_MOUSE = 0
     INPUT_KEYBOARD = 1
     LEFTDOWN = 0x0002
     LEFTUP = 0x0004
@@ -500,9 +489,9 @@ class WindowsController:
     def click(self, x: int, y: int) -> None:
         self.user32.SetCursorPos(x, y)
         time.sleep(0.045)
-        self.user32.mouse_event(self.LEFTDOWN, 0, 0, 0, 0)
+        self._send_mouse_button(self.LEFTDOWN)
         time.sleep(0.045)
-        self.user32.mouse_event(self.LEFTUP, 0, 0, 0, 0)
+        self._send_mouse_button(self.LEFTUP)
 
     def move(self, x: int, y: int) -> None:
         self.user32.SetCursorPos(x, y)
@@ -510,9 +499,18 @@ class WindowsController:
     def right_click(self, x: int, y: int) -> None:
         self.user32.SetCursorPos(x, y)
         time.sleep(0.045)
-        self.user32.mouse_event(self.RIGHTDOWN, 0, 0, 0, 0)
+        self._send_mouse_button(self.RIGHTDOWN)
         time.sleep(0.045)
-        self.user32.mouse_event(self.RIGHTUP, 0, 0, 0, 0)
+        self._send_mouse_button(self.RIGHTUP)
+
+    def _send_mouse_button(self, flags: int) -> None:
+        event = INPUT(
+            type=self.INPUT_MOUSE,
+            value=INPUTUNION(mi=MOUSEINPUT(0, 0, 0, flags, 0, 0)),
+        )
+        if self.user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT)) != 1:
+            error = ctypes.windll.kernel32.GetLastError()
+            raise RuntimeError(f"Windows mouse SendInput failed with error {error}")
 
     def press(self, key: str) -> None:
         key = key.casefold()
@@ -653,7 +651,6 @@ class PlacedTower:
 @dataclass
 class PlacementAttempt:
     tower: PlacedTower | None = None
-    invalid_point: bool = False
 
 
 class MacroEngine:
@@ -699,6 +696,10 @@ class MacroEngine:
             if self.stop_event.wait(min(0.10, max(0.0, deadline - time.monotonic()))):
                 return False
         return True
+
+    def _command_wait(self, multiplier: float = 1.0) -> bool:
+        delay = float(self.config["loop"]["command_delay_seconds"])
+        return self._wait(delay * multiplier)
 
     def _run(self) -> None:
         window = self.config["window"]
@@ -769,8 +770,14 @@ class MacroEngine:
         if not self._wait(0.25):
             return False
         self.controller.hotkey("control", "a")
+        if not self._command_wait():
+            return False
         self.controller.press("backspace")
+        if not self._command_wait():
+            return False
         self.controller.type_text(map_name)
+        if not self._command_wait():
+            return False
         self.controller.press("enter")
         if not self._wait(delay):
             return False
@@ -809,33 +816,17 @@ class MacroEngine:
     ) -> PlacementAttempt:
         before = self._point_crop(self._screenshot(), point)
         self.controller.press(hotkey)
-        if not self._wait(0.16):
+        if not self._command_wait():
             return PlacementAttempt()
-
-        # Hover first so BTD6 can render its red invalid-placement ghost. Points
-        # detected as road/obstacle positions are retired for the rest of the game.
-        self.controller.move(*self.rect.point(point))
-        if not self._wait(0.22):
-            return PlacementAttempt()
-        ghost = self._point_crop(self._screenshot(), point, radius=0.042)
-        red_ratio = invalid_placement_red_ratio(ghost)
-        invalid_threshold = float(self.config["detection"]["invalid_placement_red_ratio"])
-        if red_ratio >= invalid_threshold:
-            self.controller.right_click(*self.rect.point(point))
-            self.log(
-                f"Discarded blocked placement point {point[0]:.3f}, {point[1]:.3f} "
-                f"(invalid red {red_ratio:.1%})."
-            )
-            return PlacementAttempt(invalid_point=True)
-
+        self.log(f"Left-clicking {name} placement at {point[0]:.3f}, {point[1]:.3f}.")
         self.controller.click(*self.rect.point(point))
-        if not self._wait(0.24):
+        if not self._command_wait():
             return PlacementAttempt()
         # Escape opens Pause whenever placement failed (for example, because the
         # tower is unaffordable). Right-click safely cancels a ghost placement or
         # deselects a placed tower without opening Pause.
         self.controller.right_click(*self.rect.point(point))
-        if not self._wait(0.55):
+        if not self._command_wait():
             return PlacementAttempt()
         after = self._point_crop(self._screenshot(), point)
         score = image_diff_score(before, after)
@@ -858,7 +849,7 @@ class MacroEngine:
         if tower.complete:
             return False
         self.controller.click(*self.rect.point(tower.point))
-        if not self._wait(0.38):
+        if not self._command_wait():
             return False
 
         # BTD6 opens the upgrade panel opposite the selected tower.
@@ -871,10 +862,10 @@ class MacroEngine:
             str(self.config["hotkeys"]["upgrade_bottom"]),
         )
         self.controller.press(configured_keys[path])
-        if not self._wait(0.45):
+        if not self._command_wait():
             return False
         after_first = normalized_crop(self._screenshot(), panel_box)
-        if not self._wait(0.30):
+        if not self._command_wait():
             return False
         after_settled = normalized_crop(self._screenshot(), panel_box)
         self.controller.right_click(*self.rect.point(tower.point))
@@ -972,7 +963,7 @@ class MacroEngine:
                     tower = attempt.tower
                     if tower:
                         target_towers.append(tower)
-                    elif not attempt.invalid_point:
+                    else:
                         # Retry valid-looking coordinates later; lack of cash is common.
                         candidates.insert(0, candidate)
                     acted = True
@@ -991,7 +982,7 @@ class MacroEngine:
                         tower = attempt.tower
                         if tower:
                             target_towers.append(tower)
-                        elif not attempt.invalid_point:
+                        else:
                             candidates.insert(0, candidate)
 
                 next_action = time.monotonic() + float(self.config["loop"]["action_interval_seconds"])
@@ -1074,8 +1065,8 @@ class BloomerApp:
         self._f8_was_down = False
 
         self.root.title(f"{APP_NAME} {APP_VERSION}")
-        self.root.geometry("680x670")
-        self.root.minsize(620, 590)
+        self.root.geometry("700x720")
+        self.root.minsize(660, 640)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         self.tower_var = tk.StringVar(value=str(self.config["last_tower"]))
@@ -1085,6 +1076,8 @@ class BloomerApp:
         self.title_var = tk.StringVar(value=str(self.config["window"]["title_contains"]))
         self.cycles_var = tk.StringVar(value=str(self.config["loop"]["completed_games"]))
         self.round_var = tk.StringVar(value=str(self.config["loop"]["round_pulse_seconds"]))
+        self.command_delay_var = tk.StringVar(value=str(self.config["loop"]["command_delay_seconds"]))
+        self.action_interval_var = tk.StringVar(value=str(self.config["loop"]["action_interval_seconds"]))
         self.status_var = tk.StringVar(value="Ready - put BTD6 on its main menu before starting.")
 
         self._build_ui()
@@ -1131,8 +1124,17 @@ class BloomerApp:
         ttk.Label(outer, text="Round pulse (seconds)").grid(row=7, column=2, sticky="e", pady=(10, 0))
         ttk.Entry(outer, textvariable=self.round_var, width=9).grid(row=7, column=3, sticky="w", padx=(8, 0), pady=(10, 0))
 
+        ttk.Label(outer, text="Command delay (seconds)").grid(row=8, column=0, sticky="w", pady=(10, 0))
+        ttk.Entry(outer, textvariable=self.command_delay_var, width=9).grid(
+            row=8, column=1, sticky="w", padx=8, pady=(10, 0)
+        )
+        ttk.Label(outer, text="Action interval (seconds)").grid(row=8, column=2, sticky="e", pady=(10, 0))
+        ttk.Entry(outer, textvariable=self.action_interval_var, width=9).grid(
+            row=8, column=3, sticky="w", padx=(8, 0), pady=(10, 0)
+        )
+
         controls = ttk.Frame(outer)
-        controls.grid(row=8, column=0, columnspan=4, sticky="ew", pady=16)
+        controls.grid(row=9, column=0, columnspan=4, sticky="ew", pady=16)
         self.start_button = ttk.Button(controls, text="Start farming", command=self.start)
         self.start_button.pack(side="left")
         self.stop_button = ttk.Button(controls, text="Stop (F8)", command=self.stop, state="disabled")
@@ -1141,23 +1143,23 @@ class BloomerApp:
         ttk.Button(controls, text="Calibrate points...", command=self.calibrate).pack(side="left")
 
         ttk.Label(outer, textvariable=self.status_var, wraplength=630).grid(
-            row=9, column=0, columnspan=4, sticky="w", pady=(0, 8)
+            row=10, column=0, columnspan=4, sticky="w", pady=(0, 8)
         )
         self.log_box = tk.Text(outer, height=16, wrap="word", state="disabled", font=("Consolas", 9))
-        self.log_box.grid(row=10, column=0, columnspan=4, sticky="nsew")
+        self.log_box.grid(row=11, column=0, columnspan=4, sticky="nsew")
         scrollbar = ttk.Scrollbar(outer, orient="vertical", command=self.log_box.yview)
-        scrollbar.grid(row=10, column=4, sticky="ns")
+        scrollbar.grid(row=11, column=4, sticky="ns")
         self.log_box.configure(yscrollcommand=scrollbar.set)
 
         ttk.Label(
             outer,
             text="Emergency stop: F8. Keep this macro out of co-op, races, ranked events, and other competitive modes.",
             foreground="#8a2d2d",
-        ).grid(row=11, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        ).grid(row=12, column=0, columnspan=4, sticky="w", pady=(10, 0))
 
         outer.columnconfigure(1, weight=1)
         outer.columnconfigure(3, weight=1)
-        outer.rowconfigure(10, weight=1)
+        outer.rowconfigure(11, weight=1)
 
     def _tower_changed(self) -> None:
         name = self.tower_var.get()
@@ -1174,14 +1176,20 @@ class BloomerApp:
             height = int(self.height_var.get())
             cycles = int(self.cycles_var.get())
             round_seconds = float(self.round_var.get())
+            command_delay = float(self.command_delay_var.get())
+            action_interval = float(self.action_interval_var.get())
         except ValueError as exc:
-            raise ValueError("Resolution, cycles, and round pulse must be numeric.") from exc
+            raise ValueError("Resolution, cycles, and all timing fields must be numeric.") from exc
         if width < 800 or height < 600:
             raise ValueError("Fallback resolution must be at least 800 x 600.")
         if cycles < 0:
             raise ValueError("Cycles cannot be negative.")
         if round_seconds < 5:
             raise ValueError("Round pulse must be at least 5 seconds.")
+        if not 0.10 <= command_delay <= 5.0:
+            raise ValueError("Command delay must be between 0.10 and 5 seconds.")
+        if not 0.5 <= action_interval <= 60.0:
+            raise ValueError("Action interval must be between 0.5 and 60 seconds.")
         hotkey = self.hotkey_var.get().strip()
         if len(hotkey) != 1:
             raise ValueError("Placement hotkey must be exactly one character.")
@@ -1193,6 +1201,8 @@ class BloomerApp:
         self.config["window"]["title_contains"] = self.title_var.get().strip()
         self.config["loop"]["completed_games"] = cycles
         self.config["loop"]["round_pulse_seconds"] = round_seconds
+        self.config["loop"]["command_delay_seconds"] = command_delay
+        self.config["loop"]["action_interval_seconds"] = action_interval
         self.config["hotkeys"]["tower_overrides"][name] = hotkey
 
     def save_settings(self) -> None:

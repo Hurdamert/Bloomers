@@ -22,7 +22,7 @@ Land towers use Monkey Meadow. Monkey Sub, Monkey Buccaneer, and Mermonkey use S
 
 After confirming one cycle works, set **Cycles** to `0` for continuous farming. Press **F8** at any time for an emergency stop.
 
-Bloomer has no third-party runtime dependencies. Keyboard actions use Windows `SendInput` scan codes so BTD6 receives tower and upgrade hotkeys reliably.
+Bloomer has no third-party runtime dependencies. Keyboard and mouse actions use Windows `SendInput`, so BTD6 receives tower hotkeys, upgrade hotkeys, and explicit left-click placement events reliably.
 
 Bloomer minimizes itself, locates the BTD6 client area, searches for the exact target map by name, and scales normalized coordinates to the actual window. The width and height fields are only a fallback if the window title cannot be found.
 
@@ -32,7 +32,7 @@ Bloomer minimizes itself, locates the BTD6 client area, searches for the exact t
 - If it is initially unaffordable, one cheap Dart Monkey starts the game.
 - Farms and Villages can receive a Dart and Bomb helper; target-tower spending remains the priority.
 - Every target gets one of six randomly selected builds: `420`, `402`, `240`, `042`, `204`, or `024` by default.
-- Curated Monkey Meadow points favor grass close to the road, while red invalid-placement ghost detection discards blocked points before clicking.
+- Curated Monkey Meadow points favor grass close to the road while excluding known road locations. Every placement attempt sends an explicit left click before the macro evaluates whether it succeeded.
 - Visual change detection confirms placements and upgrades, so failed purchases caused by insufficient cash are retried later.
 - Paired Space presses use a transition delay so a paused round reliably starts and enters fast-forward without changing the speed of a round already in progress.
 - A visual detector distinguishes the blue Victory and Defeat dialogs. Defeat uses Restart; victory uses Home and begins the navigation flow again.
@@ -44,6 +44,8 @@ The activity log shows every confirmed placement, upgrade, and detected end scre
 The included profile was measured from the supplied 1920x1200 screenshots and uses normalized positions, so it scales to other 16:9 and 16:10 resolutions. UI layout changes, unusual aspect ratios, and cosmetic themes may still move a control.
 
 Use **Calibrate points...** to record navigation and end-screen buttons for another layout. The map-search button and its top-center text field are separate calibration targets. Select an item, click Capture, then put the mouse over the corresponding BTD6 control within four seconds.
+
+**Command delay** controls the pause between closely related inputs, such as selecting a tower, left-clicking its location, and cancelling the placement cursor. Increase it if BTD6 misses clicks or keys. **Action interval** controls the pause between placement/upgrade decisions during a running round.
 
 Advanced timing, detection thresholds, and placement lists live in [`config.json`](config.json). The application creates or updates that file without discarding newly added defaults.
 

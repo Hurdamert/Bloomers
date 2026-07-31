@@ -11,7 +11,6 @@ from bloomer import (
     deep_merge,
     generate_build,
     image_diff_score,
-    invalid_placement_red_ratio,
     target_map_name,
 )
 
@@ -59,6 +58,11 @@ class BuildTests(unittest.TestCase):
         self.assertNotIn([0.445, 0.700], points)
         self.assertNotIn([0.650, 0.750], points)
 
+    def test_command_timing_defaults_are_user_safe(self):
+        loop = DEFAULT_CONFIG["loop"]
+        self.assertGreaterEqual(loop["command_delay_seconds"], 0.10)
+        self.assertGreaterEqual(loop["action_interval_seconds"], 0.5)
+
 
 class VisualDetectionTests(unittest.TestCase):
     def make_dialog(self, title_color):
@@ -83,13 +87,6 @@ class VisualDetectionTests(unittest.TestCase):
         before = PixelFrame.solid(10, 10, (0, 0, 0))
         after = PixelFrame.solid(10, 10, (12, 12, 12))
         self.assertAlmostEqual(image_diff_score(before, after), 12.0)
-
-    def test_invalid_placement_red_ratio(self):
-        valid = PixelFrame.solid(20, 20, (60, 180, 70))
-        invalid = PixelFrame.solid(20, 20, (220, 45, 35))
-        self.assertLess(invalid_placement_red_ratio(valid), 0.01)
-        self.assertGreater(invalid_placement_red_ratio(invalid), 0.99)
-
 
 if __name__ == "__main__":
     unittest.main()
