@@ -19,7 +19,7 @@ from typing import Callable, Sequence
 
 
 APP_NAME = "Bloomer"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
 
@@ -117,6 +117,7 @@ DEFAULT_CONFIG: dict = {
         "home_play": [0.500, 0.865],
         "beginner": [0.285, 0.890],
         "map_search": [0.045, 0.153],
+        "map_search_field": [0.500, 0.060],
         "map_card": [0.255, 0.250],
         "difficulty_easy": [0.305, 0.400],
         "mode_standard": [0.307, 0.510],
@@ -148,7 +149,8 @@ DEFAULT_CONFIG: dict = {
 CALIBRATABLE_POINTS = {
     "Home: Play": "home_play",
     "Map category: Beginner": "beginner",
-    "Map search": "map_search",
+    "Open map search": "map_search",
+    "Map search text field": "map_search_field",
     "First search result / Monkey Meadow": "map_card",
     "Difficulty: Easy": "difficulty_easy",
     "Mode: Standard": "mode_standard",
@@ -339,6 +341,8 @@ class WindowsController:
     KEYUP = 0x0002
     LEFTDOWN = 0x0002
     LEFTUP = 0x0004
+    RIGHTDOWN = 0x0008
+    RIGHTUP = 0x0010
 
     def __init__(self) -> None:
         if sys.platform != "win32":
@@ -439,6 +443,13 @@ class WindowsController:
         self.user32.mouse_event(self.LEFTDOWN, 0, 0, 0, 0)
         time.sleep(0.045)
         self.user32.mouse_event(self.LEFTUP, 0, 0, 0, 0)
+
+    def right_click(self, x: int, y: int) -> None:
+        self.user32.SetCursorPos(x, y)
+        time.sleep(0.045)
+        self.user32.mouse_event(self.RIGHTDOWN, 0, 0, 0, 0)
+        time.sleep(0.045)
+        self.user32.mouse_event(self.RIGHTUP, 0, 0, 0, 0)
 
     def press(self, key: str) -> None:
         key = key.casefold()
@@ -670,7 +681,11 @@ class MacroEngine:
         self._click_point("map_search")
         if not self._wait(0.8):
             return False
-        # The search field receives focus when the search button opens.
+        # Opening search does not focus its top-center text box on every BTD6
+        # layout, so click the field explicitly before replacing its contents.
+        self._click_point("map_search_field")
+        if not self._wait(0.25):
+            return False
         self.controller.hotkey("control", "a")
         self.controller.press("backspace")
         self.controller.type_text(map_name)
@@ -717,7 +732,10 @@ class MacroEngine:
         self.controller.click(*self.rect.point(point))
         if not self._wait(0.24):
             return None
-        self.controller.press(str(self.config["hotkeys"]["cancel"]))
+        # Escape opens Pause whenever placement failed (for example, because the
+        # tower is unaffordable). Right-click safely cancels a ghost placement or
+        # deselects a placed tower without opening Pause.
+        self.controller.right_click(*self.rect.point(point))
         if not self._wait(0.55):
             return None
         after = self._point_crop(self._screenshot(), point)
@@ -760,7 +778,7 @@ class MacroEngine:
         if not self._wait(0.30):
             return False
         after_settled = normalized_crop(self._screenshot(), panel_box)
-        self.controller.press(str(self.config["hotkeys"]["cancel"]))
+        self.controller.right_click(*self.rect.point(tower.point))
 
         change = image_diff_score(before, after_settled)
         motion = image_diff_score(after_first, after_settled)

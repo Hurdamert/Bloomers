@@ -40,6 +40,11 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(target_map_name(MONKEYS["Monkey Sub"]), "Spice Islands")
         self.assertEqual(target_map_name(MONKEYS["Mermonkey"]), "Spice Islands")
 
+    def test_search_field_has_separate_calibration_point(self):
+        self.assertIn("map_search", DEFAULT_CONFIG["points"])
+        self.assertIn("map_search_field", DEFAULT_CONFIG["points"])
+        self.assertNotEqual(DEFAULT_CONFIG["points"]["map_search"], DEFAULT_CONFIG["points"]["map_search_field"])
+
 
 class VisualDetectionTests(unittest.TestCase):
     def make_dialog(self, title_color):

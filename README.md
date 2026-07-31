@@ -42,7 +42,7 @@ The activity log shows every confirmed placement, upgrade, and detected end scre
 
 The included profile was measured from the supplied 1920x1200 screenshots and uses normalized positions, so it scales to other 16:9 and 16:10 resolutions. UI layout changes, unusual aspect ratios, and cosmetic themes may still move a control.
 
-Use **Calibrate points...** to record navigation and end-screen buttons for another layout. Select an item, click Capture, then put the mouse over the corresponding BTD6 control within four seconds.
+Use **Calibrate points...** to record navigation and end-screen buttons for another layout. The map-search button and its top-center text field are separate calibration targets. Select an item, click Capture, then put the mouse over the corresponding BTD6 control within four seconds.
 
 Advanced timing, detection thresholds, and placement lists live in [`config.json`](config.json). The application creates or updates that file without discarding newly added defaults.
 
