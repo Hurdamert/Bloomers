@@ -35,7 +35,7 @@ Bloomer minimizes itself, locates the BTD6 client area, searches for the exact t
 - Curated Monkey Meadow points favor grass close to the road while excluding known road locations. Every placement attempt sends an explicit left click before the macro evaluates whether it succeeded.
 - Visual change detection confirms placements and upgrades, so failed purchases caused by insufficient cash are retried later.
 - After four failed attempts, an unavailable upgrade path is skipped for that monkey and farming continues with its remaining cross-path upgrades. This allows partially unlocked monkeys to keep running.
-- Paired Space presses use a transition delay so a paused round reliably starts and enters fast-forward without changing the speed of a round already in progress.
+- Bloomer sends one Start Round command per game. It never sends a speed command or another round command during that game, leaving automatic round and speed handling to BTD6.
 - A visual detector distinguishes the blue Victory and Defeat dialogs. Defeat uses Restart; victory uses Home and begins the navigation flow again.
 
 The activity log shows every confirmed placement, upgrade, and detected end screen.
