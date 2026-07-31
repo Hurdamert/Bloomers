@@ -65,6 +65,7 @@ class BuildTests(unittest.TestCase):
 
     def test_command_timing_defaults_are_user_safe(self):
         loop = DEFAULT_CONFIG["loop"]
+        self.assertGreaterEqual(loop["fast_forward_delay_seconds"], 0.20)
         self.assertGreaterEqual(loop["command_delay_seconds"], 0.10)
         self.assertGreaterEqual(loop["action_interval_seconds"], 0.5)
 
@@ -91,6 +92,26 @@ class BuildTests(unittest.TestCase):
 
         self.assertFalse(engine._can_afford(700, "test tower"))
         self.assertTrue(engine._can_afford(600, "test tower"))
+
+    def test_game_start_uses_exactly_one_double_press(self):
+        class Controller:
+            def __init__(self):
+                self.keys = []
+
+            def press(self, key):
+                self.keys.append(key)
+
+        engine = MacroEngine.__new__(MacroEngine)
+        engine.config = {
+            "hotkeys": {"start_round": "space"},
+            "loop": {"fast_forward_delay_seconds": 0.55},
+        }
+        engine.controller = Controller()
+        engine._wait = lambda seconds: seconds == 0.55
+        engine.log = lambda _message: None
+
+        self.assertTrue(engine._start_game_fast_forward())
+        self.assertEqual(engine.controller.keys, ["space", "space"])
 
     def test_unavailable_upgrade_path_can_be_skipped(self):
         tower = PlacedTower("Boomerang Monkey", (0.2, 0.3), (4, 2, 0), [0, 1, 0, 1, 0, 0])

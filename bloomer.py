@@ -23,7 +23,7 @@ from btd6_costs import tower_cost, upgrade_cost
 
 
 APP_NAME = "Bloomer"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
 
@@ -134,6 +134,7 @@ DEFAULT_CONFIG: dict = {
         "start_delay_seconds": 5.0,
         "navigation_delay_seconds": 2.5,
         "load_delay_seconds": 8.0,
+        "fast_forward_delay_seconds": 0.55,
         "command_delay_seconds": 0.35,
         "action_interval_seconds": 3.5,
         "restart_delay_seconds": 7.0,
@@ -1026,6 +1027,16 @@ class MacroEngine:
                 )
         return success
 
+    def _start_game_fast_forward(self) -> bool:
+        """Start and speed up once; automatic rounds need no later key presses."""
+        round_key = str(self.config["hotkeys"]["start_round"])
+        self.controller.press(round_key)
+        if not self._wait(float(self.config["loop"]["fast_forward_delay_seconds"])):
+            return False
+        self.controller.press(round_key)
+        self.log("Started the game and enabled fast-forward once; no more round commands will be sent.")
+        return True
+
     def _play_one_game(self) -> str | None:
         self.log(f"Farming {self.spec.name}. End-screen detection is active.")
         placement_key = "spice_islands" if self.spec.water_map else "monkey_meadow_near_track"
@@ -1051,11 +1062,9 @@ class MacroEngine:
             if helper:
                 helpers.append(helper)
 
-        # BTD6's auto-start/auto-speed behavior handles every subsequent round.
-        # Send exactly one start input per game and never toggle the speed state.
-        self.controller.press(str(self.config["hotkeys"]["start_round"]))
-        self.log("Started the game with one round command; no speed commands will be sent.")
-        if not self._command_wait():
+        # The first press starts the game and the second enables fast-forward.
+        # BTD6 auto-starts later rounds, so this pair is sent only once per game.
+        if not self._start_game_fast_forward():
             return None
 
         next_action = time.monotonic() + float(self.config["loop"]["action_interval_seconds"])
@@ -1210,6 +1219,7 @@ class BloomerApp:
         self.height_var = tk.StringVar(value=str(self.config["window"]["fallback_height"]))
         self.title_var = tk.StringVar(value=str(self.config["window"]["title_contains"]))
         self.cycles_var = tk.StringVar(value=str(self.config["loop"]["completed_games"]))
+        self.fast_forward_delay_var = tk.StringVar(value=str(self.config["loop"]["fast_forward_delay_seconds"]))
         self.command_delay_var = tk.StringVar(value=str(self.config["loop"]["command_delay_seconds"]))
         self.action_interval_var = tk.StringVar(value=str(self.config["loop"]["action_interval_seconds"]))
         self.status_var = tk.StringVar(value="Ready - put BTD6 on its main menu before starting.")
@@ -1255,6 +1265,10 @@ class BloomerApp:
 
         ttk.Label(outer, text="Cycles (0 = infinite)").grid(row=7, column=0, sticky="w", pady=(10, 0))
         ttk.Entry(outer, textvariable=self.cycles_var, width=9).grid(row=7, column=1, sticky="w", padx=8, pady=(10, 0))
+        ttk.Label(outer, text="Start-speed delay (seconds)").grid(row=7, column=2, sticky="e", pady=(10, 0))
+        ttk.Entry(outer, textvariable=self.fast_forward_delay_var, width=9).grid(
+            row=7, column=3, sticky="w", padx=(8, 0), pady=(10, 0)
+        )
 
         ttk.Label(outer, text="Command delay (seconds)").grid(row=8, column=0, sticky="w", pady=(10, 0))
         ttk.Entry(outer, textvariable=self.command_delay_var, width=9).grid(
@@ -1307,6 +1321,7 @@ class BloomerApp:
             width = int(self.width_var.get())
             height = int(self.height_var.get())
             cycles = int(self.cycles_var.get())
+            fast_forward_delay = float(self.fast_forward_delay_var.get())
             command_delay = float(self.command_delay_var.get())
             action_interval = float(self.action_interval_var.get())
         except ValueError as exc:
@@ -1315,6 +1330,8 @@ class BloomerApp:
             raise ValueError("Fallback resolution must be at least 800 x 600.")
         if cycles < 0:
             raise ValueError("Cycles cannot be negative.")
+        if not 0.20 <= fast_forward_delay <= 5.0:
+            raise ValueError("Start-speed delay must be between 0.20 and 5 seconds.")
         if not 0.10 <= command_delay <= 5.0:
             raise ValueError("Command delay must be between 0.10 and 5 seconds.")
         if not 0.5 <= action_interval <= 60.0:
@@ -1329,6 +1346,7 @@ class BloomerApp:
         self.config["window"]["fallback_height"] = height
         self.config["window"]["title_contains"] = self.title_var.get().strip()
         self.config["loop"]["completed_games"] = cycles
+        self.config["loop"]["fast_forward_delay_seconds"] = fast_forward_delay
         self.config["loop"]["command_delay_seconds"] = command_delay
         self.config["loop"]["action_interval_seconds"] = action_interval
         self.config["hotkeys"]["tower_overrides"][name] = hotkey

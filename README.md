@@ -36,7 +36,7 @@ Bloomer minimizes itself, locates the BTD6 client area, searches for the exact t
 - Visual change detection confirms successful placements and upgrades after the budget gate approves them.
 - Before sending a purchase input, Bloomer reads the live cash counter and compares it with a conservative Normal-price ceiling. Because the macro plays Easy, this remains safe when Easy or Monkey Knowledge discounts lower the actual price.
 - After four failed attempts, an unavailable upgrade path is skipped for that monkey and farming continues with its remaining cross-path upgrades. This allows partially unlocked monkeys to keep running.
-- Bloomer sends one Start Round command per game. It never sends a speed command or another round command during that game, leaving automatic round and speed handling to BTD6.
+- Bloomer sends one initial pair per game: Start Round, then Fast Forward. It sends no more round or speed commands during that game, leaving later rounds to BTD6's automatic handling.
 - A visual detector distinguishes the blue Victory and Defeat dialogs. Defeat uses Restart; victory uses Home and begins the navigation flow again.
 
 The activity log shows every confirmed placement, upgrade, and detected end screen.
@@ -47,7 +47,7 @@ The included profile was measured from the supplied 1920x1200 screenshots and us
 
 Use **Calibrate points...** to record navigation and end-screen buttons for another layout. The map-search button and its top-center text field are separate calibration targets. Select an item, click Capture, then put the mouse over the corresponding BTD6 control within four seconds.
 
-**Command delay** controls the pause between closely related inputs, such as selecting a tower, left-clicking its location, and cancelling the placement cursor. Increase it if BTD6 misses clicks or keys. **Action interval** controls the pause between placement/upgrade decisions during a running round.
+**Start-speed delay** controls the pause between the one-time Start Round and Fast Forward presses. **Command delay** controls the pause between other closely related inputs, such as selecting a tower, left-clicking its location, and cancelling the placement cursor. Increase either delay if BTD6 misses the corresponding input. **Action interval** controls the pause between placement/upgrade decisions during a running round.
 
 Advanced timing, detection thresholds, the normalized `cash_box`, placement lists, and the `upgrade_retry_limit` live in [`config.json`](config.json). The application creates or updates that file without discarding newly added defaults. Conservative purchase ceilings are kept in [`btd6_costs.py`](btd6_costs.py) and originate from the [BTD6 Mod Helper game-data export](https://github.com/Btd6ModHelper/btd6-game-data).
 
