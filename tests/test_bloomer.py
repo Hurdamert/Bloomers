@@ -1,9 +1,11 @@
 import random
+import ctypes
 import unittest
 
 from bloomer import (
     DEFAULT_CONFIG,
     MONKEYS,
+    INPUT,
     PixelFrame,
     classify_end_screen,
     deep_merge,
@@ -44,6 +46,11 @@ class BuildTests(unittest.TestCase):
         self.assertIn("map_search", DEFAULT_CONFIG["points"])
         self.assertIn("map_search_field", DEFAULT_CONFIG["points"])
         self.assertNotEqual(DEFAULT_CONFIG["points"]["map_search"], DEFAULT_CONFIG["points"]["map_search_field"])
+
+    def test_send_input_structure_has_windows_x64_size(self):
+        # Win32 INPUT must be 40 bytes in a 64-bit Python process and 28 bytes in 32-bit.
+        expected = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
+        self.assertEqual(ctypes.sizeof(INPUT), expected)
 
 
 class VisualDetectionTests(unittest.TestCase):

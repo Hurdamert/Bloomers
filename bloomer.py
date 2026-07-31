@@ -19,8 +19,49 @@ from typing import Callable, Sequence
 
 
 APP_NAME = "Bloomer"
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3"
 CONFIG_PATH = Path(__file__).with_name("config.json")
+
+
+ULONG_PTR = wintypes.WPARAM
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    ]
+
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    ]
+
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
+    ]
+
+
+class INPUTUNION(ctypes.Union):
+    _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT), ("hi", HARDWAREINPUT)]
+
+
+class INPUT(ctypes.Structure):
+    _anonymous_ = ("value",)
+    _fields_ = [("type", wintypes.DWORD), ("value", INPUTUNION)]
 
 
 @dataclass(frozen=True)
@@ -339,6 +380,8 @@ class WindowsController:
         "f8": 0x77,
     }
     KEYUP = 0x0002
+    SCANCODE = 0x0008
+    INPUT_KEYBOARD = 1
     LEFTDOWN = 0x0002
     LEFTUP = 0x0004
     RIGHTDOWN = 0x0008
@@ -374,6 +417,10 @@ class WindowsController:
         self.user32.ShowWindow.restype = wintypes.BOOL
         self.user32.VkKeyScanW.argtypes = [wintypes.WCHAR]
         self.user32.VkKeyScanW.restype = ctypes.c_short
+        self.user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
+        self.user32.MapVirtualKeyW.restype = wintypes.UINT
+        self.user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+        self.user32.SendInput.restype = wintypes.UINT
 
         self.gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
         self.gdi32.CreateCompatibleDC.restype = wintypes.HDC
@@ -472,22 +519,35 @@ class WindowsController:
             raise ValueError(f"Unsupported hotkey {key!r}; use one character or a named key")
 
         for modifier in modifiers:
-            self.user32.keybd_event(modifier, 0, 0, 0)
-        self.user32.keybd_event(vk, 0, 0, 0)
+            self._send_key(modifier, key_up=False)
+        self._send_key(vk, key_up=False)
         time.sleep(0.045)
-        self.user32.keybd_event(vk, 0, self.KEYUP, 0)
+        self._send_key(vk, key_up=True)
         for modifier in reversed(modifiers):
-            self.user32.keybd_event(modifier, 0, self.KEYUP, 0)
+            self._send_key(modifier, key_up=True)
+
+    def _send_key(self, virtual_key: int, key_up: bool) -> None:
+        scan_code = self.user32.MapVirtualKeyW(virtual_key, 0)
+        if not scan_code:
+            raise ValueError(f"Windows cannot map virtual key 0x{virtual_key:02x} to a scan code")
+        flags = self.SCANCODE | (self.KEYUP if key_up else 0)
+        event = INPUT(
+            type=self.INPUT_KEYBOARD,
+            value=INPUTUNION(ki=KEYBDINPUT(0, scan_code, flags, 0, 0)),
+        )
+        if self.user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT)) != 1:
+            error = ctypes.windll.kernel32.GetLastError()
+            raise RuntimeError(f"Windows SendInput failed with error {error}")
 
     def hotkey(self, modifier: str, key: str) -> None:
         modifier_vk = self.VK.get(modifier.casefold())
         if modifier_vk is None:
             raise ValueError(f"Unsupported modifier {modifier!r}")
-        self.user32.keybd_event(modifier_vk, 0, 0, 0)
+        self._send_key(modifier_vk, key_up=False)
         try:
             self.press(key)
         finally:
-            self.user32.keybd_event(modifier_vk, 0, self.KEYUP, 0)
+            self._send_key(modifier_vk, key_up=True)
 
     def type_text(self, value: str) -> None:
         for character in value:

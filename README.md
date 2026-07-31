@@ -22,7 +22,7 @@ Land towers use Monkey Meadow. Monkey Sub, Monkey Buccaneer, and Mermonkey use S
 
 After confirming one cycle works, set **Cycles** to `0` for continuous farming. Press **F8** at any time for an emergency stop.
 
-Bloomer has no third-party runtime dependencies.
+Bloomer has no third-party runtime dependencies. Keyboard actions use Windows `SendInput` scan codes so BTD6 receives tower and upgrade hotkeys reliably.
 
 Bloomer minimizes itself, locates the BTD6 client area, searches for the exact target map by name, and scales normalized coordinates to the actual window. The width and height fields are only a fallback if the window title cannot be found.
 
