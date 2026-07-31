@@ -19,7 +19,7 @@ from typing import Callable, Sequence
 
 
 APP_NAME = "Bloomer"
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
 
@@ -131,6 +131,7 @@ DEFAULT_CONFIG: dict = {
         "navigation_delay_seconds": 2.5,
         "load_delay_seconds": 8.0,
         "round_pulse_seconds": 22.0,
+        "fast_forward_delay_seconds": 0.55,
         "action_interval_seconds": 3.5,
         "restart_delay_seconds": 7.0,
         "max_target_towers": 8,
@@ -150,6 +151,7 @@ DEFAULT_CONFIG: dict = {
     },
     "detection": {
         "placement_change_threshold": 4.2,
+        "invalid_placement_red_ratio": 0.065,
         "upgrade_change_threshold": 1.25,
         "end_blue_ratio": 0.055,
         "end_text_ratio": 0.008,
@@ -167,13 +169,12 @@ DEFAULT_CONFIG: dict = {
         "defeat_restart": [0.435, 0.755],
     },
     "placements": {
-        "monkey_meadow": [
-            [0.120, 0.150], [0.235, 0.145], [0.465, 0.160], [0.690, 0.155],
-            [0.785, 0.260], [0.360, 0.330], [0.470, 0.335], [0.660, 0.455],
-            [0.775, 0.455], [0.325, 0.500], [0.450, 0.475], [0.575, 0.530],
-            [0.735, 0.600], [0.195, 0.675], [0.335, 0.715], [0.445, 0.700],
-            [0.650, 0.750], [0.780, 0.775], [0.300, 0.895], [0.480, 0.885],
-            [0.620, 0.900], [0.750, 0.900]
+        "monkey_meadow_near_track": [
+            [0.245, 0.355], [0.330, 0.365], [0.385, 0.365], [0.470, 0.405],
+            [0.590, 0.500], [0.680, 0.405], [0.760, 0.520], [0.205, 0.610],
+            [0.235, 0.700], [0.335, 0.620], [0.440, 0.605], [0.685, 0.610],
+            [0.770, 0.720], [0.330, 0.825], [0.435, 0.790], [0.545, 0.790],
+            [0.670, 0.820]
         ],
         "spice_islands": [
             [0.110, 0.175], [0.235, 0.155], [0.385, 0.175], [0.525, 0.165],
@@ -319,6 +320,18 @@ def image_diff_score(before: PixelFrame, after: PixelFrame) -> float:
         total += abs(before.data[index + 2] - after.data[index + 2])
         count += 3
     return total / count if count else 0.0
+
+
+def invalid_placement_red_ratio(image: PixelFrame) -> float:
+    """Return the proportion of pixels matching BTD6's red invalid ghost overlay."""
+    pixels = list(image.sampled_rgb(target_samples=12000))
+    if not pixels:
+        return 0.0
+    invalid_red = sum(
+        1 for r, g, b in pixels
+        if r >= 155 and g <= 105 and b <= 105 and r >= g * 1.65 and r >= b * 1.55
+    )
+    return invalid_red / len(pixels)
 
 
 def classify_end_screen(image: PixelFrame, detection: dict) -> str | None:
@@ -491,6 +504,9 @@ class WindowsController:
         time.sleep(0.045)
         self.user32.mouse_event(self.LEFTUP, 0, 0, 0, 0)
 
+    def move(self, x: int, y: int) -> None:
+        self.user32.SetCursorPos(x, y)
+
     def right_click(self, x: int, y: int) -> None:
         self.user32.SetCursorPos(x, y)
         time.sleep(0.045)
@@ -632,6 +648,12 @@ class PlacedTower:
     @property
     def build_label(self) -> str:
         return "".join(str(value) for value in self.build)
+
+
+@dataclass
+class PlacementAttempt:
+    tower: PlacedTower | None = None
+    invalid_point: bool = False
 
 
 class MacroEngine:
@@ -784,26 +806,43 @@ class MacroEngine:
         point: tuple[float, float],
         helper: bool = False,
         fixed_build: tuple[int, int, int] | None = None,
-    ) -> PlacedTower | None:
+    ) -> PlacementAttempt:
         before = self._point_crop(self._screenshot(), point)
         self.controller.press(hotkey)
         if not self._wait(0.16):
-            return None
+            return PlacementAttempt()
+
+        # Hover first so BTD6 can render its red invalid-placement ghost. Points
+        # detected as road/obstacle positions are retired for the rest of the game.
+        self.controller.move(*self.rect.point(point))
+        if not self._wait(0.22):
+            return PlacementAttempt()
+        ghost = self._point_crop(self._screenshot(), point, radius=0.042)
+        red_ratio = invalid_placement_red_ratio(ghost)
+        invalid_threshold = float(self.config["detection"]["invalid_placement_red_ratio"])
+        if red_ratio >= invalid_threshold:
+            self.controller.right_click(*self.rect.point(point))
+            self.log(
+                f"Discarded blocked placement point {point[0]:.3f}, {point[1]:.3f} "
+                f"(invalid red {red_ratio:.1%})."
+            )
+            return PlacementAttempt(invalid_point=True)
+
         self.controller.click(*self.rect.point(point))
         if not self._wait(0.24):
-            return None
+            return PlacementAttempt()
         # Escape opens Pause whenever placement failed (for example, because the
         # tower is unaffordable). Right-click safely cancels a ghost placement or
         # deselects a placed tower without opening Pause.
         self.controller.right_click(*self.rect.point(point))
         if not self._wait(0.55):
-            return None
+            return PlacementAttempt()
         after = self._point_crop(self._screenshot(), point)
         score = image_diff_score(before, after)
         threshold = float(self.config["detection"]["placement_change_threshold"])
         if score < threshold:
             self.log(f"Placement not confirmed at {point[0]:.3f}, {point[1]:.3f} (change {score:.1f}).")
-            return None
+            return PlacementAttempt()
 
         if fixed_build is None:
             build, sequence = generate_build(self.rng, int(self.config["loop"]["main_path_tier"]))
@@ -813,7 +852,7 @@ class MacroEngine:
         tower = PlacedTower(name, point, build, sequence, helper=helper)
         role = "helper" if helper else "target"
         self.log(f"Placed {role} {name} with planned build {tower.build_label} (change {score:.1f}).")
-        return tower
+        return PlacementAttempt(tower=tower)
 
     def _try_upgrade(self, tower: PlacedTower) -> bool:
         if tower.complete:
@@ -856,16 +895,16 @@ class MacroEngine:
         return success
 
     def _pulse_round(self) -> None:
-        # Two quick presses start+fast-forward when paused. During an active round,
-        # they toggle speed twice and leave its state unchanged.
+        # BTD6 needs time to transition from Start to Fast Forward. During an
+        # active round, the pair toggles speed twice and leaves its state unchanged.
         key = str(self.config["hotkeys"]["start_round"])
         self.controller.press(key)
-        time.sleep(0.13)
-        self.controller.press(key)
+        if self._wait(float(self.config["loop"]["fast_forward_delay_seconds"])):
+            self.controller.press(key)
 
     def _play_one_game(self) -> str | None:
         self.log(f"Farming {self.spec.name}. End-screen detection is active.")
-        placement_key = "spice_islands" if self.spec.water_map else "monkey_meadow"
+        placement_key = "spice_islands" if self.spec.water_map else "monkey_meadow_near_track"
         candidates = [tuple(point) for point in self.config["placements"][placement_key]]
         self.rng.shuffle(candidates)
         helper_points = [tuple(point) for point in self.config["placements"]["helpers"]]
@@ -873,16 +912,18 @@ class MacroEngine:
         helpers: list[PlacedTower] = []
 
         # Try the farm target before spending anything on a helper.
-        first = self._try_place(self.spec.name, self._target_hotkey, candidates.pop())
+        first_attempt = self._try_place(self.spec.name, self._target_hotkey, candidates.pop())
+        first = first_attempt.tower
         if first:
             target_towers.append(first)
 
         # An unaffordable starting tower, Banana Farm, or Village needs a cheap start.
         if not first or self.spec.passive:
-            helper = self._try_place(
+            helper_attempt = self._try_place(
                 "Dart Monkey", MONKEYS["Dart Monkey"].default_hotkey, helper_points[0],
                 helper=True, fixed_build=(0, 2, 3),
             )
+            helper = helper_attempt.tower
             if helper:
                 helpers.append(helper)
 
@@ -912,10 +953,11 @@ class MacroEngine:
 
                 # Passive targets get a second small defender once cash permits.
                 if self.spec.passive and len(helpers) == 1 and action_number % 5 == 0:
-                    helper = self._try_place(
+                    helper_attempt = self._try_place(
                         "Bomb Shooter", MONKEYS["Bomb Shooter"].default_hotkey, helper_points[1],
                         helper=True, fixed_build=(2, 0, 3),
                     )
+                    helper = helper_attempt.tower
                     if helper:
                         helpers.append(helper)
                     acted = True
@@ -926,10 +968,11 @@ class MacroEngine:
                 )
                 if should_place:
                     candidate = candidates.pop()
-                    tower = self._try_place(self.spec.name, self._target_hotkey, candidate)
+                    attempt = self._try_place(self.spec.name, self._target_hotkey, candidate)
+                    tower = attempt.tower
                     if tower:
                         target_towers.append(tower)
-                    else:
+                    elif not attempt.invalid_point:
                         # Retry valid-looking coordinates later; lack of cash is common.
                         candidates.insert(0, candidate)
                     acted = True
@@ -944,10 +987,11 @@ class MacroEngine:
                         self._try_upgrade(self.rng.choice(pending_targets))
                     elif candidates and len(target_towers) < max_targets:
                         candidate = candidates.pop()
-                        tower = self._try_place(self.spec.name, self._target_hotkey, candidate)
+                        attempt = self._try_place(self.spec.name, self._target_hotkey, candidate)
+                        tower = attempt.tower
                         if tower:
                             target_towers.append(tower)
-                        else:
+                        elif not attempt.invalid_point:
                             candidates.insert(0, candidate)
 
                 next_action = time.monotonic() + float(self.config["loop"]["action_interval_seconds"])

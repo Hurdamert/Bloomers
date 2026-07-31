@@ -32,8 +32,9 @@ Bloomer minimizes itself, locates the BTD6 client area, searches for the exact t
 - If it is initially unaffordable, one cheap Dart Monkey starts the game.
 - Farms and Villages can receive a Dart and Bomb helper; target-tower spending remains the priority.
 - Every target gets one of six randomly selected builds: `420`, `402`, `240`, `042`, `204`, or `024` by default.
+- Curated Monkey Meadow points favor grass close to the road, while red invalid-placement ghost detection discards blocked points before clicking.
 - Visual change detection confirms placements and upgrades, so failed purchases caused by insufficient cash are retried later.
-- Paired Space presses safely start and fast-forward a paused round without changing the speed of a round already in progress.
+- Paired Space presses use a transition delay so a paused round reliably starts and enters fast-forward without changing the speed of a round already in progress.
 - A visual detector distinguishes the blue Victory and Defeat dialogs. Defeat uses Restart; victory uses Home and begins the navigation flow again.
 
 The activity log shows every confirmed placement, upgrade, and detected end screen.
